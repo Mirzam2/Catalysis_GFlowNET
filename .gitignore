@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+*.so
+
+# Логи и tqdm-выводы прогонов
+logs/
+*.log
+
+# Данные: пользовательские и вычисляемые — НЕ коммитим.
+# См. CLAUDE.md §3.4: ref_structures, mp_pdm_entries, кэши, seed_states у
+# каждого свои/правильные локально; наши могут быть мусором + они тяжёлые.
+data/
+samples/
+checkpoints/
+
+# Окружение / IDE
+.venv/
+venv/
+.env
+.ipynb_checkpoints/
+.DS_Store
+.vscode/

@@ -1,0 +1,51 @@
+# Конфиг PDH-GFlowNet поверх каркаса Mila gflownet (hydra).
+# Запуск на an01:
+#   python scripts/train.py --config-name pdh
+defaults:
+  - base            # из mila-gflownet/config
+  - _self_
+
+env:
+  _target_: pdh_gfn.envs.catalyst.PdMCatalyst
+
+proxy:
+  _target_: pdh_gfn.proxy.PDHProxy
+  # pipeline собирается в scripts/train.py (потенциал, оболочка, кэш)
+
+gflownet:
+  loss: trajectorybalance        # Malkin et al. 2022
+  optimizer:
+    lr: 1.0e-4
+    z_dim: 16
+    lr_z_mult: 100               # logZ учится быстрее политики (станд. для TB)
+    n_train_steps: 5000
+  batch_size:
+    forward: 8                   # на итерацию; награда дорогая
+    backward_dataset: 4          # подмешивание затравочных траекторий (MP-фазы)
+    backward_replay: 4
+
+buffer:
+  replay_capacity: 1000
+  train:
+    type: pkl
+    path: data/seed_states.pkl   # из scripts/seed_from_mp.py
+
+policy:
+  forward:
+    type: mlp
+    n_hid: 512
+    n_layers: 4
+  backward:
+    shared_weights: True
+
+pdh:
+  potential:
+    model: uma-s-1p2
+    bulk_task: omat              # релаксации объёма (MP-уровень теории)
+    ads_task: oc20               # адсорбция (режим валидации по Purdy)
+    device: cuda
+  hull_entries: data/mp_pdm_entries.json
+  reward_cache: data/reward_cache.jsonl
+  fmax_coarse: 0.10              # ранние итерации
+  fmax_fine: 0.03                # поздние / финальная валидация
+  max_sites: 8
