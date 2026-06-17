@@ -20,7 +20,14 @@ from .base import Potential
 class UMAPotential(Potential):
     def __init__(self, model: str = "uma-s-1p2", task: str = "oc20",
                  device: str = "cuda"):
+        import torch
         from fairchem.core import pretrained_mlip, FAIRChemCalculator
+
+        # tf32 для matmul на Ampere+ (A5000): ~×1.15 к forward при сдвиге
+        # энергии ~1 мэВ / сил ~5e-4 (проверено probe_inference). Для BE
+        # (разности) и дескрипторов незаметно. Ставится здесь, чтобы
+        # calibrate / warmup / train считали в ОДНОЙ точности.
+        torch.set_float32_matmul_precision("high")
 
         self.task = task
         self._predictor = pretrained_mlip.get_predict_unit(model, device=device)
@@ -34,7 +41,6 @@ class UMAPotential(Potential):
         forward UMA. Эквивалент FAIRChemCalculator по системе (проверено:
         dE~1e-6 эВ, max|dF|~1e-7). Основа батчевой релаксации адсорбатов.
         """
-        import numpy as np
         from fairchem.core.datasets.atomic_data import (
             AtomicData, atomicdata_list_to_batch)
 
