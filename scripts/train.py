@@ -154,6 +154,7 @@ def build_pipeline(args) -> RewardPipeline:
         prefilter_keep=args.prefilter_keep,
         save_dir=None if args.save_structures == "off" else args.save_structures,
         use_batch_relaxation=getattr(args, "batch_relax", False),
+        cache_only=getattr(args, "cache_only", False),
     )
 
 
@@ -885,8 +886,13 @@ def main():
                       help="Батч-релаксация адсорбатов на GPU: все конфигурации "
                            "(сайты × H/CH/C3H7) поверхности релаксируются одним "
                            "батчевым forward UMA вместо последовательных. "
-                           "Ускоряет фазы 2-3 (адсорбция ~87% времени). Требует "
-                           "UMA (fairchem); на EMT-mock падает на sequential.")
+                           "ВНИМАНИЕ: на реальных слэбах оказалась ×3 МЕДЛЕННЕЕ "
+                           "(связка по медленной конфигурации) — не использовать.")
+    prof.add_argument("--cache-only", action="store_true",
+                      help="Офлайн-обучение на УЖЕ посчитанных данных: на промахе "
+                           "кэша адсорбция НЕ считается (награда по стабильности). "
+                           "Шаг ~3 c вместо ~50 c — быстрая итерация политики на "
+                           "закэшированной хорошей области без дорогого UMA.")
 
     # --- Семплирование ---
     samp = p.add_argument_group("Семплирование после обучения")
@@ -903,8 +909,9 @@ def main():
                      help="Включить wandb логирование")
     log.add_argument("--eval-period", type=int, default=100,
                      help="Evaluировать каждые N шагов")
-    log.add_argument("--ckpt-period", type=int, default=500,
-                     help="Сохранять чекпоинт каждые N шагов")
+    log.add_argument("--ckpt-period", type=int, default=50,
+                     help="Сохранять чекпоинт каждые N шагов (дёшево; чаще = "
+                          "меньше потерь при падении/перезапуске)")
     log.add_argument("--gc-period", type=int, default=0,
                      help="Сборка мусора каждые N шагов (0 = disabled)")
 

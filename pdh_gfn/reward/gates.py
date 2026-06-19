@@ -84,8 +84,12 @@ def invalid_reward() -> RewardBreakdown:
 def composite_reward(desc: Descriptors, e_hull: float) -> RewardBreakdown:
     # Стабильность: мягкая экспонента, тоже с полом (далёкие от hull не нулевые)
     r_stab = max(GATE_FLOOR, math.exp(-max(0.0, e_hull) / C.SIGMA_STAB))
-    # Активность: floored-сигмоида (ниже порога E_act = активнее)
-    r_act = _floored_sigmoid((C.E_ACT_CH_MAX - desc.e_act_ch) / C.E_ACT_SCALE)
+    # Активность: floored-сигмоида (ниже порога E_act = активнее), НО с клэмпом
+    # снизу на E_ACT_CH_MIN — Eact ниже валидированного диапазона не даёт доп.
+    # награды (защита от reward-hacking через нефизичный/отрицательный барьер,
+    # куда BEP экстраполируется на переусиленных связывателях).
+    e_act_eff = max(desc.e_act_ch, C.E_ACT_CH_MIN)
+    r_act = _floored_sigmoid((C.E_ACT_CH_MAX - e_act_eff) / C.E_ACT_SCALE)
     # Селективность: floored-сигмоида
     r_sel = _floored_sigmoid((desc.e_sel - C.E_SEL_TARGET) / C.E_SEL_SCALE)
     r = r_stab * r_act * r_sel

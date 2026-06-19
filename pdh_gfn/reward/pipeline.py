@@ -109,6 +109,7 @@ class RewardPipeline:
         prefilter_keep: int = 4,
         save_dir: Optional[str] = None,
         use_batch_relaxation: bool = False,
+        cache_only: bool = False,
     ):
         """
         Parameters
@@ -152,6 +153,7 @@ class RewardPipeline:
         self.prefilter_sites = prefilter_sites
         self.prefilter_keep = prefilter_keep
         self.use_batch_relaxation = use_batch_relaxation
+        self.cache_only = cache_only
         self.saver = StructureSaver(save_dir)
         self._bulk_cache: Dict[str, Tuple] = {}
 
@@ -190,6 +192,13 @@ class RewardPipeline:
         if cached is not None:
             logger.debug("кэш-хит: %s, reward=%.2e", sl_key[:8], cached.reward_beta)
             return cached
+
+        # ОФЛАЙН-режим: учим политику на УЖЕ посчитанных данных. На промахе
+        # кэша не считаем дорогую адсорбцию — отдаём награду по стабильности
+        # (bulk нужен лишь для ключа/hull). Так шаг идёт за ~3 c вместо ~50 c,
+        # политика концентрируется на закэшированной хорошей области.
+        if self.cache_only:
+            return stability_only_reward(e_hull)
 
         # --- поверхность -------------------------------------------------
         surf_dir = StructureSaver.surface_dir(

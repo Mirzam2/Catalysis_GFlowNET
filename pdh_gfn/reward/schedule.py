@@ -31,7 +31,8 @@ from typing import List, Optional
 import math
 
 from .gates import RewardBreakdown, composite_reward, GATE_FLOOR
-from ..reward.descriptors import Descriptors
+from ..reward.descriptors import compute_descriptors
+from .. import constants as C
 
 
 # ---- Truncated linear scores -------------------------------------------
@@ -60,7 +61,10 @@ def truncated_linear_scores(e_hull: float, e_act_ch: float, e_sel: float):
     Все clip сверху единицей → нельзя выкрутить один за счёт остальных.
     """
     s_stab = _clip01(1.0 - max(0.0, e_hull) / STAB_E_HULL_MAX)
-    s_act = _clip01(1.0 - (e_act_ch - ACT_E_MIN) / (ACT_E_MAX - ACT_E_MIN))
+    # клэмп Eact снизу на E_ACT_CH_MIN: ниже валидированного диапазона НЕ активнее
+    # (анти-hack; BEP экстраполируется в отрицательный барьер на переусиленных)
+    e_act_eff = max(e_act_ch, C.E_ACT_CH_MIN)
+    s_act = _clip01(1.0 - (e_act_eff - ACT_E_MIN) / (ACT_E_MAX - ACT_E_MIN))
     s_sel = _clip01((e_sel - SEL_E_MIN) / (SEL_E_MAX - SEL_E_MIN))
     return s_stab, s_act, s_sel
 
@@ -113,8 +117,14 @@ class RewardSchedule:
         phase = self.current_phase(step)
 
         if phase.mode == "gated":
-            # Финальный режим: сигмоиды с порогами из constants.py
-            return breakdown.reward_beta
+            # Финальный режим: сигмоиды с порогами из constants.py.
+            # Пересчитываем из дескрипторов СВЕЖИМ гейтом (с клэмпом Eact) —
+            # иначе кэш-хит отдаёт reward_beta, посчитанный СТАРЫМ гейтом до фикса.
+            if breakdown.e_sel is None or breakdown.be_h is None:
+                return breakdown.reward_beta
+            desc = compute_descriptors(breakdown.be_h, breakdown.be_ch,
+                                       breakdown.be_ch_meta, breakdown.be_c3h7)
+            return composite_reward(desc, breakdown.e_hull or 0.0).reward_beta
 
         # --- phase.mode == "linear" ---
         # invalid: не смогли оценить даже стабильность (bulk/pyxtal упали) → пол

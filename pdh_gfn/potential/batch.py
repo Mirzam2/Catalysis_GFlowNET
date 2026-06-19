@@ -173,9 +173,6 @@ def batch_adsorption_energies(
     # один батчевый FIRE по всем оставшимся конфигурациям
     with PROFILER.timed("ads.batch_relax"):
         results = batch_relax(potential, atoms_list, fmax=fmax)
-    n_conv = sum(1 for _, _, ok in results if ok)
-    PROFILER.add_relax("ads.batch_relax", len(results),
-                       n_conv == len(results))
 
     out: Dict[str, List[float]] = {name: [] for name in adsorbate_factories}
     for k, (energy, atoms, valid) in enumerate(results):
