@@ -140,6 +140,15 @@ def build_pipeline(args) -> RewardPipeline:
     cache = RewardCache(path=Path(args.cache))
     print(f"RewardCache: {len(cache)} записей в {args.cache}")
 
+    # surrogate-оценщик BE (вариант B): пре-фильтр перед адсорбцией
+    surrogate = None
+    surrogate_mode = getattr(args, "surrogate", "off")
+    if surrogate_mode != "off":
+        from pdh_gfn.reward.surrogate import SurrogateBE
+        surrogate = SurrogateBE.load(args.surrogate_model)
+        print(f"SurrogateBE: загружен {args.surrogate_model}, "
+              f"режим={surrogate_mode} (адсорбаты: {list(surrogate.models)})")
+
     return RewardPipeline(
         potential=bulk_pot,
         adsorption_potential=ads_pot,
@@ -155,6 +164,12 @@ def build_pipeline(args) -> RewardPipeline:
         save_dir=None if args.save_structures == "off" else args.save_structures,
         use_batch_relaxation=getattr(args, "batch_relax", False),
         cache_only=getattr(args, "cache_only", False),
+        surrogate=surrogate,
+        surrogate_mode=surrogate_mode,
+        surrogate_log=getattr(args, "surrogate_log", None),
+        surrogate_gate_thresh=getattr(args, "surrogate_gate_thresh", 0.05),
+        surrogate_unc_max=getattr(args, "surrogate_unc_max", 0.5),
+        surrogate_cache=getattr(args, "surrogate_cache", None),
     )
 
 
@@ -830,6 +845,21 @@ def main():
                           "этапах: bulk/slab/adsorbates. 'off' отключает.")
     pot.add_argument("--prefilter-keep", type=int, default=4,
                      help="#2 сколько лучших сайтов релаксировать после префильтра")
+    pot.add_argument("--surrogate", choices=["off", "shadow", "gate"],
+                     default="off",
+                     help="surrogate-оценщик BE (вариант B): off | shadow "
+                          "(лог pred-vs-real, reward не трогает) | gate (роутинг)")
+    pot.add_argument("--surrogate-model", default="data/surrogate_be.pkl",
+                     help="путь к обученной модели (scripts/train_surrogate.py)")
+    pot.add_argument("--surrogate-log", default="data/surrogate_shadow.jsonl",
+                     help="JSONL для shadow-режима: pred-vs-real BE")
+    pot.add_argument("--surrogate-gate-thresh", type=float, default=0.05,
+                     help="gate: порог r_act*r_sel — выше уходит на полный UMA "
+                          "(ниже = агрессивнее скип). Консервативно: 0.05")
+    pot.add_argument("--surrogate-unc-max", type=float, default=0.5,
+                     help="gate: макс. неопределённость BE (эВ); выше → UMA")
+    pot.add_argument("--surrogate-cache", default="data/surrogate_cache.jsonl",
+                     help="gate: отдельный кэш предсказаний (НЕ reward_cache)")
 
     # --- Обучение ---
     train = p.add_argument_group("Обучение")

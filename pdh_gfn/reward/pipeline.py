@@ -15,13 +15,14 @@
 """
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import numpy as np
 from ase import Atoms
 
 from .. import constants as C
-from ..potential.base import Potential
+from ..potential.base import Potential, enumerate_sites
 from ..structure.builder import build_bulk
 from ..structure.canonical import slab_hash, structure_hash
 from ..structure.slab import cut_slab
@@ -110,6 +111,12 @@ class RewardPipeline:
         save_dir: Optional[str] = None,
         use_batch_relaxation: bool = False,
         cache_only: bool = False,
+        surrogate=None,
+        surrogate_mode: str = "off",
+        surrogate_log: Optional[str] = None,
+        surrogate_gate_thresh: float = 0.05,
+        surrogate_unc_max: float = 0.5,
+        surrogate_cache: Optional[str] = None,
     ):
         """
         Parameters
@@ -154,6 +161,20 @@ class RewardPipeline:
         self.prefilter_keep = prefilter_keep
         self.use_batch_relaxation = use_batch_relaxation
         self.cache_only = cache_only
+        # surrogate-оценщик BE (вариант B). mode: off | shadow | gate.
+        # shadow: считаем pred, логируем pred-vs-real, на reward НЕ влияет.
+        # gate: уверенно-низкий хвост скипаем (отдаём pred reward), остальное
+        #       и неуверенное — на полный UMA.
+        self.surrogate = surrogate
+        self.surrogate_mode = surrogate_mode if surrogate is not None else "off"
+        self.surrogate_log = surrogate_log
+        self.surrogate_gate_thresh = surrogate_gate_thresh  # порог r_act*r_sel
+        self.surrogate_unc_max = surrogate_unc_max          # макс. unc (эВ)
+        # отдельный кэш предсказаний (НЕ смешиваем с ground-truth reward_cache)
+        self.surrogate_cache = (RewardCache(path=Path(surrogate_cache))
+                                if surrogate_cache and self.surrogate_mode == "gate"
+                                else None)
+        self._gate_stats = {"skip": 0, "run": 0}
         self.saver = StructureSaver(save_dir)
         self._bulk_cache: Dict[str, Tuple] = {}
 
@@ -192,6 +213,12 @@ class RewardPipeline:
         if cached is not None:
             logger.debug("кэш-хит: %s, reward=%.2e", sl_key[:8], cached.reward_beta)
             return cached
+        # gate: повторный скип берём из surrogate-кэша ДО slab-релаксации
+        if self.surrogate_cache is not None:
+            scached = self.surrogate_cache.get(sl_key)
+            if scached is not None:
+                logger.debug("surrogate-кэш-хит: %s", sl_key[:8])
+                return scached
 
         # ОФЛАЙН-режим: учим политику на УЖЕ посчитанных данных. На промахе
         # кэша не считаем дорогую адсорбцию — отдаём награду по стабильности
@@ -217,6 +244,25 @@ class RewardPipeline:
             return result
         self.saver.save_atoms(slab_res.atoms, f"{surf_dir}/slab_relaxed.xyz",
                               energy=slab_res.energy)
+
+        # surrogate (вариант B): предсказание BE по геометрии сайтов слэба.
+        # В shadow только логируем pred-vs-real (см. ниже) — reward не трогаем.
+        surr_pred = None
+        if self.surrogate_mode != "off":
+            surr_pred = self._surrogate_predict(slab_res.atoms, e_hull)
+        # gate: уверенно-низкий хвост — скип адсорбции, отдаём pred reward
+        if self.surrogate_mode == "gate" and surr_pred is not None:
+            skipped = self._gate_skip(surr_pred, e_hull)
+            self._gate_stats["skip" if skipped is not None else "run"] += 1
+            tot = self._gate_stats["skip"] + self._gate_stats["run"]
+            if tot % 100 == 0:
+                logger.info("surrogate gate: skip=%d run=%d (%.0f%% скип)",
+                            self._gate_stats["skip"], self._gate_stats["run"],
+                            100 * self._gate_stats["skip"] / tot)
+            if skipped is not None:
+                if self.surrogate_cache is not None:
+                    self.surrogate_cache.put(sl_key, skipped)
+                return skipped
 
         # --- адсорбция: H*, CH* (стаб+мета), C3H7* ------------------------
         if self.use_batch_relaxation:
@@ -301,6 +347,12 @@ class RewardPipeline:
             self.cache.put(sl_key, result)
             return result
 
+        # surrogate shadow: лог pred-vs-real на живых данных (валидация B
+        # перед включением гейта). На reward не влияет.
+        if self.surrogate_mode == "shadow" and surr_pred is not None:
+            self._log_surrogate(sl_key, e_hull, surr_pred,
+                                be_h, be_ch, be_ch_meta, be_c3h7)
+
         # --- дескрипторы и награда ----------------------------------------
         desc = compute_descriptors(be_h, be_ch, be_ch_meta, be_c3h7)
         result = composite_reward(desc, e_hull)
@@ -336,6 +388,77 @@ class RewardPipeline:
                        "r_sel": result.r_sel,
                        "reward_beta": result.reward_beta},
         })
+        return result
+
+    # ------------------------------------------------------------------
+    def _surrogate_predict(self, slab_atoms, e_hull):
+        """Сайт-фичи релаксированного слэба → {name:(best_be, unc)} + CH_meta.
+        Не должен ронять конвейер: на любом сбое возвращает None."""
+        try:
+            from .surrogate import full_features
+            sites = enumerate_sites(slab_atoms, max_sites=self.max_sites)
+            if not sites:
+                return None
+            cell = np.asarray(slab_atoms.cell[:], float)
+            Z, pos = slab_atoms.numbers, slab_atoms.positions
+            use_soap = getattr(self.surrogate, "use_soap", False)
+            feats = [f for s in sites
+                     if (f := full_features(cell, Z, pos, np.asarray(s, float),
+                                            e_hull, use_soap)) is not None]
+            if not feats:
+                return None
+            feats = np.asarray(feats, float)
+            pred = self.surrogate.predict_slab(feats)      # {name:(best,unc)}
+            pred["CH_meta"] = self.surrogate.predict_ch_meta(feats)
+            return pred
+        except Exception:
+            logger.debug("surrogate predict failed", exc_info=True)
+            return None
+
+    def _log_surrogate(self, sl_key, e_hull, pred,
+                       be_h, be_ch, be_ch_meta, be_c3h7):
+        """JSONL pred-vs-real для офлайн-оценки точности surrogate в shadow."""
+        if not self.surrogate_log:
+            return
+        import json
+        g = lambda n, i: pred.get(n, (None, None))[i]
+        rec = {
+            "key": sl_key, "e_hull": e_hull,
+            "pred": {"H": g("H", 0), "CH": g("CH", 0), "C3H7": g("C3H7", 0),
+                     "CH_meta": pred.get("CH_meta")},
+            "unc": {"H": g("H", 1), "CH": g("CH", 1), "C3H7": g("C3H7", 1)},
+            "real": {"H": be_h, "CH": be_ch, "CH_meta": be_ch_meta,
+                     "C3H7": be_c3h7},
+        }
+        try:
+            with open(self.surrogate_log, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec) + "\n")
+        except Exception:
+            pass
+
+    def _gate_skip(self, pred, e_hull):
+        """Решение gate: вернуть предсказанный RewardBreakdown, если уверенно
+        низко (скип адсорбции), иначе None (гнать полный UMA).
+
+        На UMA уходит всё, где предсказанная активность×селективность не
+        пренебрежимо мала ИЛИ велика неопределённость — ловит и потенциально
+        интересные структуры, и переоценку оценщика (защита от reward hacking).
+        Стабильность (e_hull) известна точно, гейтим только act/sel."""
+        try:
+            be_h, be_ch, be_c3h7 = pred["H"][0], pred["CH"][0], pred["C3H7"][0]
+            be_ch_meta = pred.get("CH_meta") or be_ch
+            unc = max(pred["H"][1], pred["CH"][1], pred["C3H7"][1])
+        except Exception:
+            return None
+        if unc > self.surrogate_unc_max:        # не доверяем → UMA
+            return None
+        desc = compute_descriptors(be_h, be_ch, be_ch_meta, be_c3h7)
+        result = composite_reward(desc, e_hull)
+        if result.r_act * result.r_sel > self.surrogate_gate_thresh:
+            return None                          # потенциально хорошо/переоценка → UMA
+        # уверенно-низко: raw BE кладём для пересчёта schedule под фазу curriculum
+        result.be_h, result.be_ch = be_h, be_ch
+        result.be_ch_meta, result.be_c3h7 = be_ch_meta, be_c3h7
         return result
 
     # ------------------------------------------------------------------
