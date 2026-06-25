@@ -768,6 +768,63 @@ def set_seeds(seed):
 
 
 # ---------------------------------------------------------------------------
+#  Единый YAML-конфиг (config/run.yaml). CLI-флаги переопределяют значения.
+# ---------------------------------------------------------------------------
+
+def load_yaml_config(parser):
+    """Загружает --config YAML и задаёт ИМ дефолты argparse (CLI override сверху).
+    Ключи секций gflownet/pipeline/uma/run/data = argparse-dest имена.
+    Возвращает полный cfg-dict (нужны секции reward/curriculum)."""
+    pre, _ = parser.parse_known_args()
+    path = Path(getattr(pre, "config", None) or "config/run.yaml")
+    if not path.exists():
+        return {}
+    cfg = OmegaConf.to_container(OmegaConf.load(path), resolve=True)
+    flat = {}
+    for sec in ("gflownet", "pipeline", "uma", "run", "data"):
+        flat.update(cfg.get(sec) or {})
+    parser.set_defaults(**flat)
+    return cfg
+
+
+def apply_reward_overrides(rcfg):
+    """Переопределяет пороги награды в pdh_gfn.constants из cfg['reward']."""
+    if not rcfg:
+        return
+    from pdh_gfn import constants as C
+    mapping = {"e_act_ch_max": "E_ACT_CH_MAX", "e_act_ch_min": "E_ACT_CH_MIN",
+               "e_act_scale": "E_ACT_SCALE", "e_sel_target": "E_SEL_TARGET",
+               "e_sel_scale": "E_SEL_SCALE", "sigma_stab": "SIGMA_STAB",
+               "reward_beta": "REWARD_BETA", "r_valid_eps": "R_VALID_EPS"}
+    for yk, ck in mapping.items():
+        if rcfg.get(yk) is not None:
+            setattr(C, ck, float(rcfg[yk]))
+
+
+def build_schedule_from_cfg(ccfg):
+    """RewardSchedule из cfg['curriculum'] (пороги score + фазы). None → дефолт."""
+    from pdh_gfn.reward.schedule import RewardSchedule, Phase
+    from pdh_gfn.reward import schedule as sched_mod
+    if not ccfg:
+        return RewardSchedule()
+    mapping = {"stab_e_hull_max": "STAB_E_HULL_MAX", "act_e_min": "ACT_E_MIN",
+               "act_e_max": "ACT_E_MAX", "sel_e_min": "SEL_E_MIN",
+               "sel_e_max": "SEL_E_MAX"}
+    for yk, ck in mapping.items():
+        if ccfg.get(yk) is not None:
+            setattr(sched_mod, ck, float(ccfg[yk]))
+    phases = None
+    if ccfg.get("phases"):
+        phases = [Phase(until_step=ph.get("until"),
+                        alpha=float(ph.get("alpha", 1.0)),
+                        beta=float(ph.get("beta", 0.0)),
+                        gamma=float(ph.get("gamma", 0.0)),
+                        mode=ph.get("mode", "linear"))
+                  for ph in ccfg["phases"]]
+    return RewardSchedule(phases=phases)
+
+
+# ---------------------------------------------------------------------------
 #  Main
 # ---------------------------------------------------------------------------
 
@@ -790,6 +847,10 @@ def main():
   python scripts/train.py --n-steps 10000 --batch-size 4 --lr 5e-4
         """,
     )
+
+    p.add_argument("--config", default="config/run.yaml",
+                   help="YAML с параметрами запуска (дефолт config/run.yaml). "
+                        "CLI-флаги переопределяют значения из него.")
 
     # --- Потенциал / pipeline ---
     pot = p.add_argument_group("Потенциал / Pipeline")
@@ -929,6 +990,8 @@ def main():
     debug.add_argument("--no-train", action="store_true",
                        help="Пропустить обучение (--preflight diagnostics)")
 
+    # Единый YAML-конфиг задаёт дефолты; CLI-флаги ниже переопределяют.
+    cfg = load_yaml_config(p)
     args = p.parse_args()
 
     # ------------------------------------------------------------------
@@ -939,7 +1002,12 @@ def main():
         level="DEBUG",
     )
     logger = logging.getLogger("pdh_gfn.train")
+    if cfg:
+        logger.info("конфиг: %s", args.config)
     logger.info("аргументы: %s", vars(args))
+
+    # Пороги награды из cfg['reward'] → pdh_gfn.constants (до построения proxy).
+    apply_reward_overrides(cfg.get("reward") if cfg else None)
 
     # Профайлинг reward-конвейера (флаг --profile)
     if getattr(args, "profile", False):
@@ -980,8 +1048,8 @@ def main():
     # Curriculum: если флаг --curriculum, проксируем награду через schedule.
     schedule = None
     if args.curriculum:
-        from pdh_gfn.reward.schedule import RewardSchedule
-        schedule = RewardSchedule()  # дефолтный 4-фазный
+        # фазы и пороги score'ов — из cfg['curriculum'] (или дефолтные)
+        schedule = build_schedule_from_cfg(cfg.get("curriculum") if cfg else None)
         print(f"curriculum: включён, фаз: {len(schedule.phases)}")
         for i, ph in enumerate(schedule.phases):
             until = "до конца" if ph.until_step is None else f"до шага {ph.until_step}"

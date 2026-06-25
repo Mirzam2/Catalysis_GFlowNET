@@ -1,0 +1,90 @@
+# ЕДИНЫЙ конфиг запуска PDH-GFlowNet.
+#
+# Задаёт дефолты для scripts/train.py. Любой CLI-флаг ПЕРЕОПРЕДЕЛЯЕТ значение
+# отсюда (для быстрых экспериментов), напр.:
+#     python scripts/train.py --config config/run.yaml --n-steps 50
+#
+# Дефолтный путь — config/run.yaml, так что обычно достаточно:
+#     python scripts/train.py
+#
+# Что НЕ здесь: search-space (простр. группы, элементы, решётка, состав,
+# miller) — в pdh_gfn/constants.py (физика домена, меняется редко).
+# Ключи секций gflownet/pipeline/uma/run/data соответствуют argparse-флагам.
+
+# ── GFlowNet / оптимизатор ──────────────────────────────────────────────
+gflownet:
+  n_steps: 1500
+  batch_size: 8
+  lr: 0.0001
+  lr_z_mult: 100          # logZ учится быстрее политики (станд. TB)
+  z_dim: 16
+  n_hid: 512
+  n_layers: 4
+  clip_grad_norm: 0.0
+  random_action_prob: 0.0
+  seed: 0
+  replay_capacity: 1000
+  backward_dataset: 4
+  backward_replay: 0      # 0 = workaround бага Stack-среды (НЕ включать)
+
+# ── Пайплайн награды (UMA-релаксации) ───────────────────────────────────
+pipeline:
+  fmax: 0.10              # порог сил при релаксации (coarse)
+  max_sites: 8            # сайтов адсорбции на поверхность
+  max_sites_light: 4      # сайтов для лёгкого H*
+  e_hull_cutoff: 2.0      # ранний выход если E_hull выше (эВ/атом)
+  prefilter_keep: 4       # сколько лучших сайтов релаксировать
+  no_prefilter: false
+  batch_relax: false      # НЕ включать: ×3 медленнее на боевых слэбах
+  cache_only: false       # офлайн-обучение на кэше (без UMA-адсорбции)
+  save_structures: data/structures   # 'off' отключает
+
+# ── UMA-потенциал ───────────────────────────────────────────────────────
+uma:
+  model: uma-s-1p2
+  uma_device: cuda
+  mock: false             # EMT вместо UMA (тесты)
+
+# ── Режим прогона ───────────────────────────────────────────────────────
+run:
+  curriculum: true
+  profile: true
+  n_samples: 0            # 0 = НЕ сэмплить после обучения (иначе ~14 ч)
+  ckpt_period: 50         # чекпоинт каждые N шагов
+  eval_period: 100
+  resume: false
+  log_dir: logs/pdh_gfn
+
+# ── Данные ──────────────────────────────────────────────────────────────
+data:
+  hull_entries: data/mp_pdm_entries.json
+  cache: data/reward_cache.jsonl
+  seed_path: data/seed_states.pkl
+
+# ── Пороги награды (constants.py) ───────────────────────────────────────
+# Применяются на старте к pdh_gfn.constants. Менять осторожно — завязано
+# на калибровку эталонов (PdZn/PdIn/PdGa).
+reward:
+  e_act_ch_max: 2.71      # эВ, верх сигмоиды активности
+  e_act_ch_min: 1.0       # эВ, КЛЭМП снизу (анти-reward-hack по нефизичному Eact)
+  e_act_scale: 0.40
+  e_sel_target: 3.61      # эВ, середина PdZn(3.30)..PdIn(3.93)
+  e_sel_scale: 0.30
+  sigma_stab: 0.060       # эВ/атом, ширина гейта стабильности
+  reward_beta: 2.0
+  r_valid_eps: 0.0001
+
+# ── Curriculum (reward/schedule.py) ─────────────────────────────────────
+curriculum:
+  # пороги score'ов truncated-linear режима
+  stab_e_hull_max: 0.5
+  act_e_min: 1.0          # нижний край рампы активности (= клэмп)
+  act_e_max: 3.0
+  sel_e_min: 1.5
+  sel_e_max: 4.0
+  # фазы: until=null означает «до конца»
+  phases:
+    - {until: 500,  alpha: 1.0, beta: 0.0, gamma: 0.0, mode: linear}
+    - {until: 1000, alpha: 1.0, beta: 1.0, gamma: 0.0, mode: linear}
+    - {until: 1500, alpha: 1.0, beta: 1.0, gamma: 1.0, mode: linear}
+    - {until: null, alpha: 1.0, beta: 1.0, gamma: 1.0, mode: gated}
