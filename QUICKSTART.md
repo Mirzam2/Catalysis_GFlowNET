@@ -78,9 +78,12 @@ python scripts/train.py --device cuda \
 
 ## Что менять под себя
 
-**`pdh_gfn/constants.py`** — пороги награды после калибровки (`E_SEL_TARGET`, `E_ACT_CH_MAX`), при желании словарь M-элементов и подмножество SG.
+**`config/run.yaml`** — ЕДИНЫЙ конфиг запуска: параметры тренера (lr, batch, n_steps),
+пайплайн (fmax, max_sites…), пороги награды (`E_SEL_TARGET`, `E_ACT_CH_MAX/MIN`…),
+фазы curriculum. Любой CLI-флаг переопределяет значение отсюда.
 
-**`config/pdh.yaml`** — параметры тренера (lr, batch, steps).
+**`pdh_gfn/constants.py`** — search-space: словарь M-элементов, подмножество SG,
+диапазоны решётки/состава, miller (физика домена, меняется редко).
 
 **CLI-флаги ускорения** (см. `python scripts/train.py --help`):
 - `--e-hull-cutoff 0.15` — ранний выход для нестабильных структур (×1.5–3)
