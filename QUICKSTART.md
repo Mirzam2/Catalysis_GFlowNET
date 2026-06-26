@@ -5,7 +5,12 @@
 ## 0. Окружение
 
 Если `pdhgfn` уже собран (torch + gflownet + pdh-gfn + fairchem) — переходи к шагу 1.
-Иначе — раздел 0–3 в `INSTALL_an01.md` (клон UMA-окружения, ослабление пинов gflownet, `pip install -e . --no-deps` + ручная доустановка).
+
+Иначе — два пути:
+- **uv (быстро, воспроизводимо)** на CUDA-узле: `uv sync` (ставит стек по `uv.lock`), запуск через `uv run python …`. Детали — `INSTALL_an01.md §3b`.
+- **conda** (исходный): клон UMA-окружения + `pip install -e . --no-deps` — `INSTALL_an01.md §0–§3`.
+
+Баги Mila gflownet (cube device + np.log) обходятся монкипатчами в `scripts/train.py` — на обоих путях ручной патч клона не нужен.
 
 ## 1. Дымовой тест без GPU (~2 мин)
 
