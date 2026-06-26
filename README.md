@@ -101,13 +101,23 @@ Score-функции — truncated linear с насыщением сверху (
 
 ### Установка
 
+**uv (рекомендуется, воспроизводимо)** — `uv.lock` зафиксирован, на CUDA-узле:
 ```bash
-git clone <repo>
+git clone <repo> && cd pdh-gfn
+uv sync                              # точная копия валидированного стека по uv.lock
+uv run python scripts/train.py       # обучение (всё из config/run.yaml)
+huggingface-cli login                # доступ к facebook/UMA
+export MP_API_KEY=...                # ключ Materials Project
+```
+Стек (torch 2.8.0 cu128, fairchem 2.21.0, gflownet@git, …) и обходы багов gflownet —
+в `pyproject.toml` `[tool.uv]` + монкипатчах `scripts/train.py`. Детали: `INSTALL_an01.md §3b`.
+
+**conda (исходный путь)** — клон валидированного UMA-окружения (см. `INSTALL_an01.md`):
+```bash
 cd pdh-gfn
-pip install -e . --no-deps
-pip install fairchem-core mp-api pymatgen pyxtal ase
-huggingface-cli login   # для доступа к facebook/UMA
-export MP_API_KEY=...   # ключ Materials Project
+pip install -e . --no-deps           # --no-deps ОБЯЗАТЕЛЬНО: иначе pip полезет ставить torch
+huggingface-cli login
+export MP_API_KEY=...
 ```
 
 ### Подготовка

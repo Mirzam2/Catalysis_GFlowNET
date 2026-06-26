@@ -107,6 +107,16 @@ zip -qr archive.zip . \
 - **Анализ-тулкит** (`scripts/`): `analyze_run`, `export_candidates`,
   `find_candidate_structures`, `plot_training`. Профайлер стадий + CSV-трейс (`--profile`).
 - **Офлайн-режим** `--cache-only` (политика на кэше без UMA-адсорбции). Чекпоинты — каждые 50.
+- **uv-сборка** (`pyproject.toml [tool.uv]` + `uv.lock`, проверена на zeus): `uv sync` +
+  `uv run` воспроизводят валидированный стек (torch 2.8.0 cu128 / fairchem 2.21.0 /
+  gflownet@git) без conda. torch-индекс cu128, gflownet git@21ebf039,
+  `override-dependencies = [torch==2.8.0, numpy==2.4.6]` (поверх устаревших пинов
+  gflownet: torch 2.5.1 / numpy<2.0; fairchem требует numpy 2.0..2.5). conda-путь жив,
+  но теперь `pip install -e . --no-deps`. Детали — INSTALL_an01.md §3b.
+- **Баги Mila gflownet — монкипатчи в train.py** (`_patch_cube_device_bug`,
+  `_patch_log_reward_bug`): ContinuousCube device + `np.log(rewards_*)` на pandas
+  object-Series. Раньше патчили клон gflownet руками — теперь в нашем коде, работает на
+  любой установке (важно для uv с чистым git-gflownet).
 
 ### Что РАБОТАЕТ
 - Калибровка дескрипторов на 5 эталонах. PdZn(111), PdGa(111), PdIn(110), Pd(111), Pd3Sn(111) дают физичные числа (BE(H) ∈ [-0.5, +0.2], Eact ∈ [1.2, 2.2], E_sel ∈ [1.4, 3.9]).

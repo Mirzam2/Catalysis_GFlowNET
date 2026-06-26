@@ -118,26 +118,37 @@ print('source state OK')
 "
 ```
 
-## 3b. Альтернатива: uv (вместо conda-clone)
+## 3b. uv — воспроизводимая сборка (РАБОТАЕТ, проверено на zeus)
 
-`pyproject.toml` содержит `[tool.uv]`-конфиг под валидированный стек: torch с
-PyTorch-индекса cu128, gflownet из git (закреплён commit), `override-dependencies`
-форсит `torch==2.8.0` поверх пина gflownet (`torch==2.5.1`). Сборка — ТОЛЬКО на узле
-с CUDA (GPU-колёса под cu128 локально/без CUDA не встанут):
+`uv.lock` зафиксирован в репо → окружение воспроизводится **одной командой**, без
+conda-clone и ручных правок gflownet. ТОЛЬКО на узле с CUDA (GPU-колёса cu128 локально
+не встанут):
 
 ```bash
 cd pdh-gfn
-uv lock                 # резолв всего дерева → uv.lock (может выдать конфликт — см. ниже)
-uv sync                 # собрать .venv по lock
-uv run python scripts/train.py --mock --n-steps 2 --n-samples 0   # smoke
+uv sync                 # собрать .venv ровно по uv.lock (torch cu128 + fairchem + gflownet@git + ~200 deps)
+uv run python scripts/train.py --mock --n-steps 2 --n-samples 0   # smoke → дойдёт до reward diagnostics
+uv run python scripts/train.py                                     # боевой (config/run.yaml)
 ```
 
-Если `uv lock` падает с конфликтом версий — прислать вывод: добавим пин/override в
-`[tool.uv]`. Пины критичных (torch 2.8.0, fairchem-core 2.21.0, pymatgen, torchtyping)
-зафиксированы под рабочее окружение zeus; остальное uv резолвит и пишет в `uv.lock`.
+Что заложено в `pyproject.toml` (`[tool.uv]`):
+- **torch 2.8.0 (cu128)** с индекса `download.pytorch.org/whl/cu128`;
+- **gflownet** из git, закреплён commit `21ebf039`;
+- `override-dependencies = ["torch==2.8.0", "numpy==2.4.6"]` — форсит версии рабочего
+  окружения поверх устаревших пинов gflownet (`torch==2.5.1`, `numpy<2.0`); fairchem
+  требует `numpy>=2.0,<2.5`, поэтому 2.4.6;
+- пины: fairchem-core 2.21.0, pymatgen 2026.5.4, pyxtal 1.1.4, torchtyping 0.1.5.
 
-> conda-путь (§0–§3) остаётся основным/проверенным. uv — для воспроизводимости
-> с нуля, но требует обкатки резолва на кластере.
+Три бага Mila gflownet (ContinuousCube device + `np.log` в `log_train_iteration` ×2)
+закрыты **монкипатчами в `scripts/train.py`** (`_patch_cube_device_bug`,
+`_patch_log_reward_bug`) → работают на ЛЮБОЙ установке gflownet (uv с чистым git, conda),
+ручной патч клона больше НЕ нужен.
+
+Если меняешь зависимости — `uv lock` пересоберёт `uv.lock` (коммить его).
+
+> conda-путь (§0–§3) остаётся как был, но теперь `pip install -e . --no-deps`.
+> Совет: `git config pull.rebase true` — чтобы локальные коммиты на кластере (напр.
+> `uv.lock`) не давали "divergent branches" при `git pull`.
 
 ## 4. Записи Materials Project для оболочки (логин-узел, один раз)
 
