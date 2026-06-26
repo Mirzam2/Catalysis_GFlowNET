@@ -85,7 +85,28 @@ zip -qr archive.zip . \
 
 ---
 
-## 4. Текущее состояние (на момент v2.5 — июнь 2026)
+## 4. Текущее состояние
+
+### v2.6 (актуальное) — изменения этой линии
+
+- **Единый `config/run.yaml`** — все параметры запуска (обучение/пайплайн/UMA/пороги
+  награды/curriculum) в одном YAML; CLI-флаги переопределяют. `train.py` грузит его
+  (`--config`, дефолт `config/run.yaml`), reward/curriculum применяются к
+  `constants`/`schedule` на старте. Старый `config/pdh.yaml` УДАЛЁН (hydra-stale,
+  врал `bulk_task: omat`). Search-space по-прежнему в `constants.py`.
+- **Tier 0** (×8.5): в curriculum-фазе 1 пропуск адсорбции (награда там только от
+  e_hull). `proxy.py` (stab_only) + `pipeline.py` (ранний выход до slab).
+- **tf32** в `UMAPotential` (×1.15, ~1 мэВ). Всё ещё всё на oc20.
+- **Батч-релаксация — ТУПИК.** За `--batch-relax` есть, но НЕ использовать: на боевых
+  слэбах ×3 МЕДЛЕННЕЕ (GPU compute-bound на A5000, связка по медленной конфигурации,
+  89% invalid). Доказано `scripts/probe_batch_scaling.py`. Память: `batching-dead-end`.
+- **Reward-hacking гейтов** (BEP экстраполируется вне домена калибровки):
+  активность — мягкий клэмп `E_ACT_CH_MIN=1.0`; селективность — `r_sel` стало ОКНОМ,
+  падает за `E_SEL_MAX=5.5`. gated-режим `schedule.compute` пересчитывает награду из
+  дескрипторов. Сырой топ фильтровать по `flag=OK`. Память: `activity-gate-reward-hack`.
+- **Анализ-тулкит** (`scripts/`): `analyze_run`, `export_candidates`,
+  `find_candidate_structures`, `plot_training`. Профайлер стадий + CSV-трейс (`--profile`).
+- **Офлайн-режим** `--cache-only` (политика на кэше без UMA-адсорбции). Чекпоинты — каждые 50.
 
 ### Что РАБОТАЕТ
 - Калибровка дескрипторов на 5 эталонах. PdZn(111), PdGa(111), PdIn(110), Pd(111), Pd3Sn(111) дают физичные числа (BE(H) ∈ [-0.5, +0.2], Eact ∈ [1.2, 2.2], E_sel ∈ [1.4, 3.9]).
@@ -112,7 +133,7 @@ python scripts/rebuild_hull_oc20.py --uma-device cuda
 
 **TODO (отложено)**:
 - Подключить `canonical_miller` в конвейер — оставлено как TODO в обзоре архитектуры (требует пересчёта кэша при изменении набора граней, риск > польза сейчас).
-- Перенос порогов из `constants.py` в конфиг/CLI — чтобы unzip не затирал.
+- ~~Перенос порогов из `constants.py` в конфиг/CLI~~ — СДЕЛАНО (v2.6, `config/run.yaml`).
 - Tuning порогов `STAB_E_HULL_MAX`, `E_ACT_CH_MAX`, `E_SEL_TARGET` после первого полного прогона curriculum.
 
 ### Откалиброванные пороги (актуальные)

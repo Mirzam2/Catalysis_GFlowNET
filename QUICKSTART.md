@@ -44,37 +44,45 @@ python scripts/calibrate.py --device cuda
 
 Если знак E_act правильный и значения разумные — впиши рекомендованные пороги в `pdh_gfn/constants.py` (`E_SEL_TARGET`, `E_ACT_CH_MAX`).
 
-## 4. Smoke-run обучения (GPU, ~10 мин)
+## 4. Smoke-run обучения (~5 мин)
 
-Маленький прогон с EMT для проверки сборки тренера и device-логики (не обучение по существу):
+Маленький прогон с EMT — проверка сборки тренера, device-логики и **что грузится
+`config/run.yaml`** (в логе: `конфиг: config/run.yaml`):
 
 ```bash
-python scripts/train.py --mock --n-steps 20 --batch-size 4 --max-sites 4 --preflight
-```
-
-Затем то же на UMA, тоже короткое:
-```bash
-python scripts/train.py --device cuda --n-steps 50 --batch-size 4 --max-sites 6 --preflight
+python scripts/train.py --mock --n-steps 2 --n-samples 0
 ```
 
 После прогона смотри блок `=== reward diagnostics ===`:
-- если `invalid_frac > 90%` — структуры не считаются (плохие пороги/cutoff);
-- если `error_frac > 10%` — ошибки в конвейере, ищи WARNING выше;
-- `reward_beta min/med/max` должны различаться (не все одинаковые).
+- `invalid_frac` (на EMT-mock 100% — норма, EMT даёт мусорную адсорбцию);
+- `error_frac > 10%` — ошибки в конвейере, ищи WARNING выше;
+- `reward_beta min/med/max` должны различаться.
 
 ## 5. Полное обучение
 
+Все параметры — в `config/run.yaml` (n_steps, curriculum, tf32, ckpt-50, n_samples=0…).
+Обычно достаточно:
+
 ```bash
-sbatch sbatch/train_pdhgfn.sh
-# или интерактивно:
-python scripts/train.py --device cuda \
-    --hull-entries data/mp_pdm_entries.json \
-    --cache data/reward_cache.jsonl \
-    --fmax 0.10 --n-steps 5000
+nohup python scripts/train.py > train_run.log 2>&1 &
+# продолжить с чекпоинта:
+nohup python scripts/train.py --resume > train_resume.log 2>&1 &
 ```
 
-`reward_cache.jsonl` персистентен — перезапуски джоба переиспользуют все
-посчитанные UMA-оценки. **Не удалять между запусками.**
+> ⚠️ Не использовать `--batch-relax` — ×3 медленнее на боевых слэбах (см. ниже).
+
+`reward_cache.jsonl` персистентен — перезапуски переиспользуют посчитанные
+UMA-оценки. **Не удалять между запусками** (фикс гейтов пересчитывает награду из
+дескрипторов — кэш остаётся валидным).
+
+## 5b. Анализ прогона
+
+```bash
+TR=$(ls -t logs/pdh_gfn/trace_*.csv | head -1)
+python scripts/analyze_run.py   --trace "$TR" --log train_run.log   # отчёт
+python scripts/plot_training.py --trace "$TR" --log train_run.log   # графики PNG
+python scripts/export_candidates.py --trace "$TR" --top 100         # таблица + флаги
+```
 
 ## Что менять под себя
 
@@ -93,12 +101,15 @@ python scripts/train.py --device cuda \
 
 ## Что НЕ работает / ограничения
 
-- **Батч-релаксация UMA (#1, ×5–20)** — каркас в `pdh_gfn/potential/batch.py`,
-  доделать на кластере по fairchem v2 API.
-- **Коэффициенты BEP** в `constants.py` — точно по Seemakurthi 2025 (твоя
-  поправка). `adsorbate_refs` — Seemakurthi ур. (2) через H₂/CH₄/C₃H₈.
-- **Затравки**: 30 терминальных состояний от 5 фаз (PdZn, PdIn, PdGa,
-  Pd₃Sn, Pd₂Ga) × 3 грани × 2 сдвига. Подмешиваются через replay buffer.
+- **Батч-релаксация UMA — ТУПИК** (реализована за `--batch-relax`, но НЕ использовать):
+  на боевых слэбах ×3 *медленнее* (GPU compute-bound на A5000, связка по самой
+  медленной конфигурации). Реальные рычаги — Tier 0 (×8.5) + tf32 (×1.15), включены сами.
+- **Reward-hacking дескрипторов**: BEP экстраполируется вне домена → нефизичный
+  Eact<0 и завышенный E_sel. Закрыто частично (клэмп `E_ACT_CH_MIN`, окно `r_sel` за
+  `E_SEL_MAX`), но сырой топ всё равно фильтровать по `flag=OK` (`export_candidates.py`).
+- **backward-replay / backward-dataset отключены** (`--backward-replay 0` в конфиге) —
+  баг Stack-среды Mila. Обучение идёт только forward-траекториями.
+- **Затравки**: терминальные состояния от 5 эталонных фаз через seed buffer.
 
 ## Файлы данных (что уже есть в архиве)
 
