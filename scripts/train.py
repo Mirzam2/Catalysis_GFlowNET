@@ -809,7 +809,8 @@ def apply_reward_overrides(rcfg):
     from pdh_gfn import constants as C
     mapping = {"e_act_ch_max": "E_ACT_CH_MAX", "e_act_ch_min": "E_ACT_CH_MIN",
                "e_act_scale": "E_ACT_SCALE", "e_sel_target": "E_SEL_TARGET",
-               "e_sel_scale": "E_SEL_SCALE", "sigma_stab": "SIGMA_STAB",
+               "e_sel_scale": "E_SEL_SCALE", "e_sel_max": "E_SEL_MAX",
+               "e_sel_fall_scale": "E_SEL_FALL_SCALE", "sigma_stab": "SIGMA_STAB",
                "reward_beta": "REWARD_BETA", "r_valid_eps": "R_VALID_EPS"}
     for yk, ck in mapping.items():
         if rcfg.get(yk) is not None:

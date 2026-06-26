@@ -90,8 +90,12 @@ def composite_reward(desc: Descriptors, e_hull: float) -> RewardBreakdown:
     # куда BEP экстраполируется на переусиленных связывателях).
     e_act_eff = max(desc.e_act_ch, C.E_ACT_CH_MIN)
     r_act = _floored_sigmoid((C.E_ACT_CH_MAX - e_act_eff) / C.E_ACT_SCALE)
-    # Селективность: floored-сигмоида
-    r_sel = _floored_sigmoid((desc.e_sel - C.E_SEL_TARGET) / C.E_SEL_SCALE)
+    # Селективность: ОКНО — растёт к E_SEL_TARGET, но ПАДАЕТ за доменом BEP
+    # (E_sel выше E_SEL_MAX = экстраполяция; не даём ей хакать награду —
+    # см. E_SEL_MAX в constants.py).
+    r_sel_up = _sigmoid((desc.e_sel - C.E_SEL_TARGET) / C.E_SEL_SCALE)
+    r_sel_dn = _sigmoid((C.E_SEL_MAX - desc.e_sel) / C.E_SEL_FALL_SCALE)
+    r_sel = GATE_FLOOR + (1.0 - GATE_FLOOR) * r_sel_up * r_sel_dn
     r = r_stab * r_act * r_sel
     r = max(r, C.R_VALID_EPS)
     return RewardBreakdown(

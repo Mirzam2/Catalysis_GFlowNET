@@ -70,6 +70,8 @@ reward:
   e_act_scale: 0.40
   e_sel_target: 3.61      # эВ, середина PdZn(3.30)..PdIn(3.93)
   e_sel_scale: 0.30
+  e_sel_max: 5.5          # верх домена доверия BEP; выше — r_sel ПАДАЕТ (анти-hack)
+  e_sel_fall_scale: 0.50  # ширина спада r_sel за e_sel_max
   sigma_stab: 0.060       # эВ/атом, ширина гейта стабильности
   reward_beta: 2.0
   r_valid_eps: 0.0001
