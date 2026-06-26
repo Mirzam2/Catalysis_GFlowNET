@@ -75,6 +75,28 @@ Score-функции — truncated linear с насыщением сверху (
 - Жёсткие гейты x_Pd ∈ [0.25, 0.80] и MAX_ATOMS=16 в маске действий
 - Hull в той же UMA-oc20 шкале что и pipeline (через `rebuild_hull_oc20.py`)
 
+### Reward-hacking и фиксы гейтов
+
+Дескрипторы — линейные BEP-корреляции (Seemakurthi), откалиброванные на 5 эталонах.
+**Вне домена калибровки они экстраполируются**, что даёт reward-hacking:
+
+- **Активность**: BEP экстраполирует Eact(C-H) в отрицательный (нефизичный) барьер
+  для переусиленных связывателей → мягкий клэмп `E_ACT_CH_MIN=1.0` (ниже не активнее).
+- **Селективность**: для тех же сильных связывателей формула даёт огромный E_sel
+  (физически часто наоборот — пере-дегидрирование/кокс). `r_sel` сделан **окном**:
+  растёт к `E_SEL_TARGET`, но **падает за `E_SEL_MAX=5.5`** (экстраполяция не хакает награду).
+
+Пороги — в `pdh_gfn/constants.py` / `config/run.yaml` (секция `reward`). Сырой топ
+кандидатов всё равно фильтровать по `flag=OK` (`export_candidates.py`) и валидировать DFT.
+
+### Инженерные рычаги (что реально ускоряет)
+
+- **Tier 0** — в curriculum-фазе 1 (только стабильность) пропускаем адсорбцию (78% времени): **×8.5**.
+- **tf32** — matmul на Ampere: ×1.15 ко всем forward, сдвиг энергии ~1 мэВ.
+- Кэш наград (по дескрипторам), ранний выход по E_hull, предфильтр сайтов.
+- **Батч-релаксация — ТУПИК**: GPU compute-bound на A5000, ×3 *медленнее* на боевых
+  слэбах (связка по самой медленной конфигурации). Не использовать.
+
 ## Быстрый старт
 
 ### Установка
@@ -107,15 +129,35 @@ python scripts/calibrate.py --device cuda
 
 ### Обучение
 
+Все параметры — в едином `config/run.yaml` (обучение, пайплайн, UMA, пороги награды,
+фазы curriculum). Любой CLI-флаг переопределяет значение оттуда.
+
 ```bash
 # Затравка кэша эталонами
 python scripts/warmup_cache.py --uma-device cuda --fmax 0.03 \
   --structures data/ref_structures/PdZn.cif data/ref_structures/PdGa.cif \
                data/ref_structures/PdIn.cif data/ref_structures/Pd3Sn_mp_718.cif
 
-# Curriculum обучение
-python scripts/train.py --uma-device cuda --n-steps 1500 \
-    --backward-replay 0 --curriculum
+# Обучение — всё из config/run.yaml (curriculum, tf32, ckpt-50, n_samples=0…)
+python scripts/train.py
+
+# переопределить отдельное:
+python scripts/train.py --n-steps 50            # быстрый тест
+python scripts/train.py --resume                # продолжить с чекпоинта
+```
+
+> ⚠️ **Не** использовать `--batch-relax`: на боевых слэбах оказался ×3 медленнее
+> (GPU compute-bound на A5000) — тупик, оставлен под флагом только для истории.
+
+### Анализ результатов
+
+```bash
+TR=$(ls -t logs/pdh_gfn/trace_*.csv | head -1)
+python scripts/analyze_run.py   --trace "$TR" --log train_run.log   # отчёт по прогону
+python scripts/plot_training.py --trace "$TR" --log train_run.log   # графики (PNG)
+python scripts/export_candidates.py --trace "$TR" --top 100         # таблица + флаги битых
+python scripts/find_candidate_structures.py \
+    --candidates logs/pdh_gfn/candidates_top100.csv --copy           # кандидат → .xyz
 ```
 
 ### Диагностика
@@ -159,7 +201,11 @@ pdh-gfn/
 | `plot_hull.py` | Визуализация Pd-M фазовых диаграмм |
 | `calibrate.py` | Калибровка дескрипторов на эталонах |
 | `warmup_cache.py` | Затравка reward_cache известными катализаторами |
-| `train.py` | Главный — обучение GFlowNet |
+| `train.py` | Главный — обучение GFlowNet (читает `config/run.yaml`) |
+| `analyze_run.py` | Отчёт по прогону: статусы/награды по фазам, топ с флагами, loss, кэш |
+| `plot_training.py` | Графики обучения (loss/награды/статусы + облако E_act–E_sel) |
+| `export_candidates.py` | Таблица top-N кандидатов с пометкой битых (over-bind / Esel-extrap) |
+| `find_candidate_structures.py` | По таблице кандидатов находит/копирует сохранённые .xyz |
 | `diagnose_env.py` | Smoke-тест GFlowNet окружения |
 
 ## Калибровочные числа

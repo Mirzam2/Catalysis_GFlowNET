@@ -143,7 +143,7 @@ python scripts/fetch_mp_entries.py --out data/mp_pdm_entries.json
 srun --gres=gpu:1 --time=0:30:00 --pty bash
 conda activate pdhgfn
 export HF_HUB_OFFLINE=1
-python scripts/train.py --device cuda --n-steps 1   # сборка env+proxy
+python scripts/train.py --mock --n-steps 2 --n-samples 0   # сборка env+proxy, грузит config/run.yaml
 ```
 
 Шаблон sbatch (`sbatch/train_pdhgfn.sh`):
@@ -162,10 +162,7 @@ export HF_HUB_OFFLINE=1
 export WANDB_MODE=offline
 
 cd /beegfs/home/georgii.bychkov/projects/pdh-gfn
-python scripts/train.py --device cuda \
-    --hull-entries data/mp_pdm_entries.json \
-    --cache data/reward_cache.jsonl \
-    --fmax 0.10
+python scripts/train.py            # все параметры из config/run.yaml
 ```
 
 Кэш наград (`reward_cache.jsonl`) персистентен — перезапуски джоба
@@ -195,18 +192,23 @@ python scripts/train.py --device cuda \
 
 ## 9. Ускорение пайплайна
 
-Профиль награды: **84% времени — адсорбционные релаксации** (3 адсорбата × N сайтов). Оптимизации, по убыванию выигрыша:
+Профиль награды (через `--profile`): адсорбционные релаксации — основная стоимость.
+Что реально работает (по убыванию выигрыша):
 
-| # | Оптимизация | Выигрыш | Статус | Флаг |
-|---|---|---|---|---|
-| 1 | Батч-релаксация UMA на GPU | ×5–20 | каркас (`potential/batch.py`), доделать на кластере по fairchem v2 API | — |
-| 2 | Предфильтр сайтов (single-point → топ-K) | ×2–4 | готово | `--prefilter-keep N` (откл. `--no-prefilter`) |
-| 3 | Двухступенчатый fmax (грубо→точно) | ×2–3 | флаги есть (`--fmax`), логика переключения — в train | `--fmax 0.2` затем дообучение `0.03` |
-| 4 | Ранний выход по E_hull | ×1.5–3 | готово | `--e-hull-cutoff 0.15` |
-| 7 | Меньше сайтов для H* | ×1.3 | готово | `--max-sites-light 3` |
+| Рычаг | Выигрыш | Статус |
+|---|---|---|
+| **Tier 0** — в curriculum-фазе 1 пропуск адсорбции (награда там только от E_hull) | **×8.5** на фазе 1 | включён при `--curriculum` |
+| **tf32** matmul (Ampere) | ×1.15 везде, ~1 мэВ | включён в `UMAPotential` |
+| Ранний выход по E_hull | ×1.5–3 | `e_hull_cutoff` в `config/run.yaml` |
+| Предфильтр сайтов (single-point → топ-K) | ×2–4 | `prefilter_keep` (откл. `no_prefilter`) |
+| Меньше сайтов для H* | ×1.3 | `max_sites_light` |
 
-Готовые (#2,#4,#7) проверены на EMT — E_sel не меняется, ранжирование сохраняется. Включены по умолчанию с безопасными значениями.
+**Батч-релаксация UMA — ТУПИК (НЕ использовать `--batch-relax`).** Измерено строго
+(`scripts/probe_batch_scaling.py`): GPU на A5000 **compute-bound**, `predict(N)` растёт
+~линейно, батч насыщается на N≈4 (потолок ×1.4), а на боевых слэбах оказался **×3
+МЕДЛЕННЕЕ** (одна болтающаяся C3H7-конфигурация тянет весь батч до 300 FIRE-шагов) +
+89% invalid. Реализация осталась за флагом только для истории.
 
-**Главный рычаг — #1 (батчинг).** Каркас и две стратегии реализации (fairchem batch-relax / ручной FIRE по пакету) описаны в `pdh_gfn/potential/batch.py`. Это даёт основное ускорение, но требует проверки batch-API fairchem на реальном GPU — поэтому оставлен как следующий шаг, а не зашит вслепую.
-
-**Рекомендация по порядку:** сначала прогнать с готовыми #2/#4/#7 (уже ×2–4 суммарно на боевых slab'ах с десятками сайтов), затем профилировать и внедрять #1, если пропускной способности не хватает для бюджета 1e4–1e5 оценок.
+**Офлайн-итерация политики**: `--cache-only` — на промахе кэша адсорбция не считается
+(награда по стабильности), шаг ~3 c вместо ~50 c. Для быстрой отладки GFlowNet на уже
+посчитанных данных.
