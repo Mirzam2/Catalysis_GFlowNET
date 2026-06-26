@@ -2,10 +2,23 @@
 name = "pdh-gfn"
 version = "0.1.0"
 description = "GFlowNet for Pd-M intermetallic PDH catalyst discovery"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.12"
 dependencies = [
-    "numpy", "pymatgen", "pyxtal", "ase",
-    # боевой запуск: gflownet (Mila, из исходников), torch, fairchem-core, mp-api
+    # лёгкие (механика пайплайна)
+    "numpy",
+    "pymatgen==2026.5.4",
+    "pyxtal==1.1.4",
+    "ase",
+    "mp-api",
+    "matplotlib",
+    # GFlowNet-стек (Mila gflownet — из git, см. [tool.uv.sources])
+    "torch==2.8.0",
+    "torchtyping==0.1.5",   # хрупкий к версии torch — пинить
+    "hydra-core",
+    "omegaconf",
+    "gflownet",
+    # UMA-потенциал
+    "fairchem-core==2.21.0",
 ]
 
 [build-system]
@@ -14,3 +27,22 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["pdh_gfn*"]
+
+# ─────────────────────────────────────────────────────────────────────────
+# uv: воспроизведение валидированного кластерного стека (torch cu128 + UMA).
+#   uv lock && uv sync   (на кластере с CUDA — локально GPU-колёса не встанут)
+# ─────────────────────────────────────────────────────────────────────────
+
+# torch берём с официального PyTorch-индекса cu128 (CUDA 12.8 на zeus)
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+gflownet = { git = "https://github.com/alexhernandezgarcia/gflownet", rev = "21ebf0392cb44b21a5adc54f970eb941b2fcfff5" }
+
+[tool.uv]
+# gflownet пинит torch==2.5.1; форсим 2.8.0 (декларативный аналог sed из INSTALL §2)
+override-dependencies = ["torch==2.8.0"]
