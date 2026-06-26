@@ -444,6 +444,39 @@ def _patch_cube_device_bug():
     print("ContinuousCube patched for CUDA device compatibility.")
 
 
+def _patch_log_reward_bug():
+    """Monkey-patch бага np.log в mila-gflownet (gflownet.py log_train_iteration).
+
+    `np.log(rewards_replay)` / `np.log(rewards)` падают на pandas object-Series
+    (`'float' object has no attribute 'log'`) в свежих numpy/pandas. Апстрим-фикс —
+    обернуть в `np.asarray(..., dtype=float)`. Чтобы НЕ патчить клон gflownet вручную
+    (важно для uv-сборки с чистым git-gflownet), на время вызова log_train_iteration
+    подменяем np.log на коэрцящую версию — она меняет поведение ТОЛЬКО при сбое,
+    обычные массивы не трогает.
+    """
+    import numpy as _np
+    from gflownet.gflownet import GFlowNetAgent
+
+    _orig = GFlowNetAgent.log_train_iteration
+    _real_log = _np.log
+
+    def _safe_log(x, *a, **k):
+        try:
+            return _real_log(x, *a, **k)
+        except (TypeError, AttributeError):
+            return _real_log(_np.asarray(x, dtype=float), *a, **k)
+
+    def _patched(self, *args, **kwargs):
+        _np.log = _safe_log
+        try:
+            return _orig(self, *args, **kwargs)
+        finally:
+            _np.log = _real_log
+
+    GFlowNetAgent.log_train_iteration = _patched
+    print("gflownet.log_train_iteration patched (np.log coercion).")
+
+
 def _move_tensor(x, device):
     """Переносит тензор на device, если он ещё не там."""
     if torch.is_tensor(x) and x.device != device:
@@ -1055,6 +1088,7 @@ def main():
     #  Patches for mila-gflownet bugs
     # ------------------------------------------------------------------
     _patch_cube_device_bug()
+    _patch_log_reward_bug()
 
     # ------------------------------------------------------------------
     #  Environment + Proxy
