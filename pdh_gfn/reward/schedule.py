@@ -66,6 +66,9 @@ def truncated_linear_scores(e_hull: float, e_act_ch: float, e_sel: float):
     e_act_eff = max(e_act_ch, C.E_ACT_CH_MIN)
     s_act = _clip01(1.0 - (e_act_eff - ACT_E_MIN) / (ACT_E_MAX - ACT_E_MIN))
     s_sel = _clip01((e_sel - SEL_E_MIN) / (SEL_E_MAX - SEL_E_MIN))
+    # спад за доменом доверия BEP: экстраполированный E_sel не даёт макс score
+    s_sel *= _clip01((C.E_SEL_MAX + C.E_SEL_FALL_SCALE - e_sel)
+                     / (2.0 * C.E_SEL_FALL_SCALE))
     return s_stab, s_act, s_sel
 
 
