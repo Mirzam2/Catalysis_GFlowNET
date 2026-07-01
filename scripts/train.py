@@ -850,6 +850,38 @@ def apply_reward_overrides(rcfg):
             setattr(C, ck, float(rcfg[yk]))
 
 
+def apply_search_space_overrides(scfg):
+    """Переопределяет search-space в pdh_gfn.constants из cfg['search_space'].
+
+    Вызывать ДО построения env (PdMCatalyst): sub-env читают константы в момент
+    сборки. Скалярные ключи маппятся в имена констант; списки (m_elements,
+    space_groups, miller_set) заменяют соответствующие наборы. m_elements
+    пересобирает ALL_ELEMENTS = [Pd] + M.
+
+    ВНИМАНИЕ: space_groups / miller_set / m_elements меняют размер action space
+    → чекпоинт с другим набором несовместим (учить с нуля)."""
+    if not scfg:
+        return
+    from pdh_gfn import constants as C
+    scalar = {"min_diff_elem": "MIN_DIFF_ELEM", "max_diff_elem": "MAX_DIFF_ELEM",
+              "x_pd_min": "X_PD_MIN", "x_pd_max": "X_PD_MAX",
+              "min_atoms": "MIN_ATOMS_PER_CELL", "max_atoms": "MAX_ATOMS_PER_CELL",
+              "length_min": "LENGTH_MIN", "length_max": "LENGTH_MAX",
+              "angle_min": "ANGLE_MIN", "angle_max": "ANGLE_MAX"}
+    ints = {"MIN_DIFF_ELEM", "MAX_DIFF_ELEM", "MIN_ATOMS_PER_CELL",
+            "MAX_ATOMS_PER_CELL"}
+    for yk, ck in scalar.items():
+        if scfg.get(yk) is not None:
+            setattr(C, ck, int(scfg[yk]) if ck in ints else float(scfg[yk]))
+    if scfg.get("m_elements"):
+        C.M_ELEMENTS = [int(z) for z in scfg["m_elements"]]
+        C.ALL_ELEMENTS = [C.PD_Z] + C.M_ELEMENTS
+    if scfg.get("space_groups"):
+        C.SPACE_GROUP_SUBSET = [int(s) for s in scfg["space_groups"]]
+    if scfg.get("miller_set"):
+        C.MILLER_SET = [tuple(int(i) for i in m) for m in scfg["miller_set"]]
+
+
 def build_schedule_from_cfg(ccfg):
     """RewardSchedule из cfg['curriculum'] (пороги score + фазы). None → дефолт."""
     from pdh_gfn.reward.schedule import RewardSchedule, Phase
@@ -1072,6 +1104,17 @@ def main():
 
     # Пороги награды из cfg['reward'] → pdh_gfn.constants (до построения proxy).
     apply_reward_overrides(cfg.get("reward") if cfg else None)
+
+    # Search-space из cfg['search_space'] → pdh_gfn.constants (ДО сборки env).
+    apply_search_space_overrides(cfg.get("search_space") if cfg else None)
+    if cfg and cfg.get("search_space"):
+        from pdh_gfn import constants as _C
+        logger.info("search_space: diff_elem=[%d,%d] x_pd=[%.2f,%.2f] "
+                    "atoms=[%d,%d] |M|=%d |SG|=%d |miller|=%d",
+                    _C.MIN_DIFF_ELEM, _C.MAX_DIFF_ELEM, _C.X_PD_MIN, _C.X_PD_MAX,
+                    _C.MIN_ATOMS_PER_CELL, _C.MAX_ATOMS_PER_CELL,
+                    len(_C.M_ELEMENTS), len(_C.SPACE_GROUP_SUBSET),
+                    len(_C.MILLER_SET))
 
     # Профайлинг reward-конвейера (флаг --profile)
     if getattr(args, "profile", False):

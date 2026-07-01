@@ -1,0 +1,2 @@
+# Shell-скрипты всегда LF — иначе bash на кластере (Linux) падает на \r.
+*.sh text eol=lf

@@ -26,22 +26,25 @@ class PdMComposition(Composition):
     def __init__(
         self,
         elements: Optional[List[int]] = None,
-        x_pd_min: float = C.X_PD_MIN,
-        x_pd_max: float = C.X_PD_MAX,
+        x_pd_min: Optional[float] = None,
+        x_pd_max: Optional[float] = None,
         **kwargs,
     ):
+        # Всё читаем из C в момент вызова (не как дефолт-аргумент): так
+        # search_space-переопределения из run.yaml, применённые до сборки env,
+        # доходят сюда. См. apply_search_space_overrides в scripts/train.py.
         elements = elements or C.ALL_ELEMENTS
         defaults = dict(
             max_diff_elem=C.MAX_DIFF_ELEM,
-            min_diff_elem=2,
+            min_diff_elem=C.MIN_DIFF_ELEM,
             min_atoms=C.MIN_ATOMS_PER_CELL,
             max_atoms=C.MAX_ATOMS_PER_CELL,
             required_elements=[C.PD_Z],
             do_charge_check=False,
         )
         defaults.update(kwargs)
-        self.x_pd_min = x_pd_min
-        self.x_pd_max = x_pd_max
+        self.x_pd_min = C.X_PD_MIN if x_pd_min is None else x_pd_min
+        self.x_pd_max = C.X_PD_MAX if x_pd_max is None else x_pd_max
         super().__init__(elements=elements, **defaults)
 
     # ------------------------------------------------------------------

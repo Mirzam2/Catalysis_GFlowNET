@@ -5,12 +5,17 @@
 включая тугоплавкие (Nb, Ta, Mo, W и т.п.), где GGA и oc20 расходятся на 4-6 эВ/атом.
 
 Что делает скрипт:
-1. Скачивает структуры всех Pd-M систем + чистых элементов из MP.
+1. Скачивает структуры всех Pd-M, M-M' и Pd-M-M' систем + чистых элементов из MP.
 2. Релаксирует каждую в UMA oc20.
 3. Сохраняет новый mp_pdm_entries.json с oc20-энергиями.
 4. Старый файл → .gga.json.bak.
 
-Время: ~500 структур × 5-15 сек = 40-120 мин на GPU.
+Тернар: оболочка каждой системы Pd-M-M' требует всех граней (Pd-M, M-M',
+Pd-M-M'). Это ~625 chemsys и, как правило, несколько тысяч структур —
+существенно дольше бинарного прогона. Прогон возобновляемый (сохранение
+после каждой записи, дедуп по mp_id), можно гонять кусками.
+
+Время: несколько тысяч структур × 5-15 сек — часы на GPU (был ~час для бинара).
 
 Использование:
     export MP_API_KEY=...
@@ -53,37 +58,67 @@ def main():
 
     # ── Шаг 1: список структур ──────────────────────────────────────────
     print("\nшаг 1: скачивание структур из MP...")
+    import itertools
     from pymatgen.core.periodic_table import Element
-    from pdh_gfn.constants import ALL_ELEMENTS
+    from pdh_gfn.constants import ALL_ELEMENTS, M_ELEMENTS, PD_Z
     from mp_api.client import MPRester
     from pymatgen.io.ase import AseAtomsAdaptor
-    from ase.build import bulk as ase_bulk
 
-    structures = []  # (mp_id, formula, atoms)
+    structures = []       # (mp_id, formula, atoms)
+    seen = set()          # дедуп по material_id (тройные chemsys пересекаются)
+
+    pd_sym = Element.from_Z(PD_Z).symbol
+    m_syms = [Element.from_Z(z).symbol for z in M_ELEMENTS]
+
+    # Полный набор chemsys для оболочки тройной системы Pd-M-M':
+    # нужны ВСЕ грани и вершины — Pd-M, M-M', Pd-M-M'. Без M-M' бинарников
+    # и тройников PhaseDiagram занижает оболочку и нестабильные структуры
+    # выглядят стабильными. Чистые элементы добираются отдельным блоком.
+    chemsys_list = ["-".join(sorted([pd_sym, m])) for m in m_syms]      # Pd-M
+    for m1, m2 in itertools.combinations(m_syms, 2):
+        chemsys_list.append("-".join(sorted([m1, m2])))                # M-M'
+        chemsys_list.append("-".join(sorted([pd_sym, m1, m2])))        # Pd-M-M'
+    print(f"  chemsys к запросу: {len(chemsys_list)} "
+          f"(Pd-M {len(m_syms)}, M-M' + Pd-M-M' по {len(m_syms)*(len(m_syms)-1)//2})")
 
     with MPRester(api_key) as mpr:
-        pd_sym = Element.from_Z(46).symbol
+        def add_docs(docs):
+            n_new = 0
+            for d in docs:
+                if d.material_id in seen:
+                    continue
+                seen.add(d.material_id)
+                a = AseAtomsAdaptor.get_atoms(d.structure)
+                structures.append((d.material_id, d.formula_pretty, a))
+                n_new += 1
+            return n_new
 
-        # Pd-M бинарники
-        for z in ALL_ELEMENTS:
-            el = Element.from_Z(z).symbol
-            if el == pd_sym:
-                continue
-            chemsys = f"{pd_sym}-{el}"
+        # Батчами: summary.search принимает список chemsys одним запросом.
+        B = 40
+        for i in range(0, len(chemsys_list), B):
+            batch = chemsys_list[i:i + B]
             try:
                 docs = mpr.summary.search(
-                    chemsys=chemsys,
+                    chemsys=batch,
                     fields=["material_id", "structure", "formula_pretty"],
                 )
-                for d in docs:
-                    a = AseAtomsAdaptor.get_atoms(d.structure)
-                    structures.append((d.material_id, d.formula_pretty, a))
-                if docs:
-                    print(f"  {chemsys}: {len(docs)}")
+                n_new = add_docs(docs)
+                print(f"  [{i+len(batch)}/{len(chemsys_list)}] +{n_new} "
+                      f"(всего {len(structures)})")
             except Exception as exc:
-                print(f"  {chemsys}: FAIL {exc}")
+                # Фолбэк: перебор chemsys по одному, чтобы не терять весь батч
+                print(f"  батч {i}: FAIL {exc}; перебор по одному...")
+                for cs in batch:
+                    try:
+                        docs = mpr.summary.search(
+                            chemsys=cs,
+                            fields=["material_id", "structure", "formula_pretty"],
+                        )
+                        add_docs(docs)
+                    except Exception as exc2:
+                        print(f"    {cs}: FAIL {exc2}")
 
-        # Чистые элементы — берём из MP по формуле
+        # Чистые элементы — берём из MP по формуле (chemsys-поиск их не вернёт)
         print(f"\nчистые элементы ({len(ALL_ELEMENTS)})...")
         for z in ALL_ELEMENTS:
             el = Element.from_Z(z).symbol
@@ -97,6 +132,9 @@ def main():
                     raise RuntimeError("нет данных")
                 # берём самый стабильный
                 best = min(docs, key=lambda d: d.energy_above_hull)
+                if best.material_id in seen:
+                    continue
+                seen.add(best.material_id)
                 a = AseAtomsAdaptor.get_atoms(best.structure)
                 structures.append((best.material_id, el, a))
                 print(f"  {el}: {best.material_id}")
